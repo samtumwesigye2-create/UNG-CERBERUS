@@ -13,7 +13,7 @@ def test_group1_end_to_end_candidate_requires_human_review():
         c = client.post('/v1/cases', json={'person_id':p['id'],'case_type':'entry_review','jurisdiction':'UG','assigned_unit':'EBB'})
         assert c.status_code == 201
         b = client.post('/v1/border-events', json={'person_id':p['id'],'direction':'entry','port_code':'EBB','country_code':'UG','occurred_at':'2026-09-16T06:00:00Z','source_authority':'IMMIGRATION','provenance_reference':'BORDER-100'})
-        assert b.status_code == 201
+        assert b.status_code == 404
         future=(date.today()+timedelta(days=30)).isoformat()
         w=client.post('/v1/watchlist',json={'subject_name':'Grace Atim','date_of_birth':'1988-05-04','originating_authority':'AUTHORIZED-UNIT','reason_category':'manual_review','legal_authority_reference':'AUTH-100','valid_until':future,'provenance_reference':'WL-100'})
         assert w.status_code==201

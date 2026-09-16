@@ -322,3 +322,93 @@ def test_officer_review_requires_authorized_owner(context, monkeypatch):
     monkeypatch.setenv('CERBERUS_PASSPORT_OPERATOR', 'other-officer')
     assert client.post(review_url, headers=HEADERS, json=body).status_code == 404
     assert client.post(f'{URL}/999999/review', headers=HEADERS, json=body).status_code == 404
+
+
+def _reviewed_passport(context, *, outcome='consistent'):
+    client, engine, payload = context
+    original = client.post(URL, headers=HEADERS, json=payload).json()
+    review = client.post(f"{URL}/{original['id']}/review", headers=HEADERS, json={
+        'outcome': outcome, 'reason': 'Border officer reviewed passport evidence.'
+    })
+    return client, engine, payload, original, review
+
+
+def test_reviewed_passport_creates_one_governed_entry_event(context):
+    client, _, payload, original, review = _reviewed_passport(context)
+    assert review.status_code == 201
+    response = client.post(f"{URL}/{original['id']}/border-event", headers=HEADERS, json={
+        'direction': 'entry', 'port_code': 'EBB', 'country_code': 'UG',
+        'occurred_at': '2026-09-16T10:00:00Z', 'source_authority': 'IMMIGRATION',
+        'provenance_reference': 'BORDER-CHECK-001',
+    })
+    assert response.status_code == 201
+    body = response.json()
+    assert body['direction'] == 'entry'
+    assert body['port_code'] == 'EBB'
+    assert body['person_id'] == payload['person_id']
+    assert body['passport_verification_id'] == original['id']
+
+
+def test_reviewed_passport_creates_exit_event_and_cannot_be_reused(context):
+    client, _, _, original, review = _reviewed_passport(context)
+    assert review.status_code == 201
+    body = {
+        'direction': 'exit', 'port_code': 'EBB', 'country_code': 'UG',
+        'occurred_at': '2026-09-16T11:00:00Z', 'source_authority': 'IMMIGRATION',
+        'provenance_reference': 'BORDER-CHECK-002',
+    }
+    assert client.post(f"{URL}/{original['id']}/border-event", headers=HEADERS, json=body).status_code == 201
+    assert client.post(f"{URL}/{original['id']}/border-event", headers=HEADERS, json=body).status_code == 409
+
+
+@pytest.mark.parametrize('outcome', ['inconclusive', 'inconsistent'])
+def test_border_event_requires_consistent_officer_review(context, outcome):
+    client, _, _, original, review = _reviewed_passport(context, outcome=outcome)
+    assert review.status_code == (201 if outcome == 'inconclusive' else 409)
+    if outcome == 'inconclusive':
+        response = client.post(f"{URL}/{original['id']}/border-event", headers=HEADERS, json={
+            'direction': 'entry', 'port_code': 'EBB', 'country_code': 'UG',
+            'occurred_at': '2026-09-16T12:00:00Z', 'source_authority': 'IMMIGRATION',
+            'provenance_reference': 'BORDER-CHECK-003',
+        })
+        assert response.status_code == 409
+
+
+def test_border_event_rejects_unreviewed_passport_and_actor_spoofing(context):
+    client, _, _, original, _ = _reviewed_passport(context)
+    # Create a second pending check and verify it cannot produce an event.
+    pending = client.post(URL, headers=HEADERS, json={
+        **context[2], 'provenance_reference': 'PENDING-CHECK',
+    }).json()
+    body = {
+        'direction': 'entry', 'port_code': 'EBB', 'country_code': 'UG',
+        'occurred_at': '2026-09-16T13:00:00Z', 'source_authority': 'IMMIGRATION',
+        'provenance_reference': 'BORDER-CHECK-004',
+    }
+    assert client.post(f"{URL}/{pending['id']}/border-event", headers=HEADERS, json=body).status_code == 409
+    assert client.post(f"{URL}/{original['id']}/border-event", json=body).status_code == 401
+
+
+def test_border_event_does_not_change_passport_review_or_make_an_admission_decision(context):
+    client, _, _, original, _ = _reviewed_passport(context)
+    body = {
+        'direction': 'entry', 'port_code': 'EBB', 'country_code': 'UG',
+        'occurred_at': '2026-09-16T14:00:00Z', 'source_authority': 'IMMIGRATION',
+        'provenance_reference': 'BORDER-CHECK-005',
+    }
+    assert client.post(f"{URL}/{original['id']}/border-event", headers=HEADERS, json=body).status_code == 201
+    result = client.get(f"{URL}/{original['id']}", headers=HEADERS).json()
+    assert result['review_status'] == 'reviewed'
+    assert result['review']['outcome'] == 'consistent'
+    assert 'admission_decision' not in result
+    assert 'denial_decision' not in result
+
+
+def test_legacy_border_event_route_is_retired(context):
+    client, _, payload = context
+    response = client.post('/v1/border-events', json={
+        'person_id': payload['person_id'], 'direction': 'entry', 'port_code': 'EBB',
+        'country_code': 'UG', 'occurred_at': '2026-09-16T15:00:00Z',
+        'source_authority': 'IMMIGRATION', 'provenance_reference': 'LEGACY-001',
+    })
+    assert response.status_code == 404

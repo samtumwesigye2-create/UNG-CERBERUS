@@ -11,12 +11,12 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import PassportReview, PassportVerification, Person, TravelDocument
+from app.models import BorderEvent, PassportReview, PassportVerification, Person, TravelDocument
 from app.passport_provider import (
     PassportEvidence, PassportProvider, SyntheticPassportProvider, UnavailablePassportProvider,
 )
@@ -58,6 +58,16 @@ class PassportReviewRequest(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     outcome: Literal['consistent', 'inconsistent', 'inconclusive']
     reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)]
+
+
+class BorderEventRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    direction: Literal['entry', 'exit']
+    port_code: ShortReference
+    country_code: Annotated[str, StringConstraints(strip_whitespace=True, min_length=2, max_length=3)]
+    occurred_at: datetime
+    source_authority: ShortReference
+    provenance_reference: AuditReference
 
 
 class PassportReviewResult(BaseModel):
@@ -178,6 +188,44 @@ def get_verification(
     if record is None or record.operator_ref != operator:
         raise HTTPException(404, 'Passport verification not found')
     return record
+
+
+@router.post('/{verification_id}/border-event', status_code=201)
+def create_border_event(
+    verification_id: int, data: BorderEventRequest,
+    operator: str = Depends(require_passport_operator), db: Session = Depends(get_db),
+):
+    record = db.get(PassportVerification, verification_id)
+    if record is None or record.operator_ref != operator:
+        raise HTTPException(404, 'Passport verification not found')
+    if record.review_status != 'reviewed' or record.review is None or record.review.outcome != 'consistent':
+        raise HTTPException(409, 'A consistent officer review is required before recording a border event')
+    if record.status != 'completed' or record.comparison != 'match' or not record.passport_authenticated or not record.presentation_live:
+        raise HTTPException(409, 'Passport evidence is not eligible for a border event')
+    existing = db.scalar(select(BorderEvent).where(BorderEvent.passport_verification_id == record.id))
+    if existing is not None:
+        raise HTTPException(409, 'Passport verification already has a border event')
+    event = BorderEvent(
+        person_id=record.person_id, passport_verification_id=record.id,
+        direction=data.direction, port_code=data.port_code, country_code=data.country_code,
+        occurred_at=data.occurred_at, source_authority=data.source_authority,
+        provenance_reference=data.provenance_reference,
+    )
+    db.add(event)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, 'Passport verification already has a border event') from None
+    db.refresh(event)
+    return {
+        'id': event.id, 'person_id': event.person_id,
+        'passport_verification_id': event.passport_verification_id,
+        'direction': event.direction, 'port_code': event.port_code,
+        'country_code': event.country_code, 'occurred_at': event.occurred_at,
+        'source_authority': event.source_authority,
+        'provenance_reference': event.provenance_reference,
+    }
 
 
 @router.post('/{verification_id}/review', status_code=201, response_model=PassportReviewResult)

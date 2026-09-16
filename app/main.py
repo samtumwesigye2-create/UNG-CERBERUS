@@ -5,13 +5,13 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from app.db import Base, engine, get_db
-from app.models import Person, PersonAlias, TravelDocument, ImmigrationCase, CaseStatusHistory, BorderEvent, WatchlistEntry, ScreeningEvent, CandidateMatch, Adjudication
-from app.schemas import PersonCreate, DocumentCreate, CaseCreate, CaseTransition, BorderEventCreate, WatchlistCreate, ScreeningCreate, AdjudicationCreate
+from app.db import Base, engine, ensure_schema, get_db
+from app.models import Person, PersonAlias, TravelDocument, ImmigrationCase, CaseStatusHistory, WatchlistEntry, ScreeningEvent, CandidateMatch, Adjudication
+from app.schemas import PersonCreate, DocumentCreate, CaseCreate, CaseTransition, WatchlistCreate, ScreeningCreate, AdjudicationCreate
 from app.passport_verification import router as passport_verification_router
-Base.metadata.create_all(bind=engine)
+ensure_schema()
 @asynccontextmanager
-async def lifespan(app:FastAPI): Base.metadata.create_all(bind=engine); yield
+async def lifespan(app:FastAPI): ensure_schema(); yield
 app=FastAPI(title='UNG-CERBERUS',version='0.4.0',lifespan=lifespan)
 app.include_router(passport_verification_router)
 @app.get('/health')
@@ -50,11 +50,6 @@ def transition_case(case_id:int,data:CaseTransition,db:Session=Depends(get_db)):
  allowed={'open':{'under_review'},'under_review':{'decided'},'decided':set()}
  if data.status not in allowed.get(c.status,set()): raise HTTPException(409,'Unsupported case transition')
  c.status=data.status; db.add(CaseStatusHistory(case_id=c.id,status=data.status,actor_ref=data.actor_ref,reason=data.reason)); db.commit(); db.refresh(c); return case_out(c)
-@app.post('/v1/border-events',status_code=201)
-def border_event(data:BorderEventCreate,db:Session=Depends(get_db)):
- if data.direction not in {'entry','exit'}: raise HTTPException(422,'direction must be entry or exit')
- if not db.get(Person,data.person_id): raise HTTPException(404,'Person not found')
- e=BorderEvent(**data.model_dump()); db.add(e); db.commit(); db.refresh(e); return {'id':e.id,'person_id':e.person_id,'direction':e.direction,'port_code':e.port_code,'country_code':e.country_code,'occurred_at':e.occurred_at,'provenance_reference':e.provenance_reference}
 @app.post('/v1/watchlist',status_code=201)
 def watchlist(data:WatchlistCreate,db:Session=Depends(get_db)):
  if not data.legal_authority_reference.strip() or not data.originating_authority.strip(): raise HTTPException(422,'authority and legal authority are required')
