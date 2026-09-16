@@ -8,10 +8,12 @@ from sqlalchemy.orm import Session
 from app.db import Base, engine, get_db
 from app.models import Person, PersonAlias, TravelDocument, ImmigrationCase, CaseStatusHistory, BorderEvent, WatchlistEntry, ScreeningEvent, CandidateMatch, Adjudication
 from app.schemas import PersonCreate, DocumentCreate, CaseCreate, CaseTransition, BorderEventCreate, WatchlistCreate, ScreeningCreate, AdjudicationCreate
+from app.passport_verification import router as passport_verification_router
 Base.metadata.create_all(bind=engine)
 @asynccontextmanager
 async def lifespan(app:FastAPI): Base.metadata.create_all(bind=engine); yield
 app=FastAPI(title='UNG-CERBERUS',version='0.4.0',lifespan=lifespan)
+app.include_router(passport_verification_router)
 @app.get('/health')
 def health(): return {'status':'ok','system':'UNG-CERBERUS'}
 @app.get('/v1/profiles/uganda')

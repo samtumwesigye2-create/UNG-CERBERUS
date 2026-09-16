@@ -43,3 +43,26 @@ class BiometricCandidate(Base):
     __tablename__='biometric_candidates'; id: Mapped[int]=mapped_column(primary_key=True); transaction_id: Mapped[int]=mapped_column(ForeignKey('biometric_transactions.id'),index=True); candidate_person_id: Mapped[int]=mapped_column(ForeignKey('people.id'),index=True); provider_score: Mapped[float]=mapped_column(Float); candidate_status: Mapped[str]=mapped_column(String(30),default='candidate'); rationale: Mapped[str]=mapped_column(Text)
 class BiometricDisposition(Base):
     __tablename__='biometric_dispositions'; id: Mapped[int]=mapped_column(primary_key=True); transaction_id: Mapped[int]=mapped_column(ForeignKey('biometric_transactions.id'),index=True); outcome: Mapped[str]=mapped_column(String(30)); reviewer_ref: Mapped[str]=mapped_column(String(120)); reason: Mapped[str]=mapped_column(Text); created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now_utc)
+
+
+class PassportVerification(Base):
+    """Result metadata only: never a capture, passport session, or template."""
+    __tablename__ = 'passport_verifications'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    person_id: Mapped[int] = mapped_column(ForeignKey('people.id'), index=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey('travel_documents.id'), index=True)
+    modality: Mapped[str] = mapped_column(String(20))
+    provider: Mapped[str] = mapped_column(String(80))
+    synthetic: Mapped[bool] = mapped_column(Boolean)
+    operator_ref: Mapped[str] = mapped_column(String(120), index=True)
+    device_reference: Mapped[str] = mapped_column(String(120))
+    purpose: Mapped[str] = mapped_column(String(80), default='border_identity_verification')
+    authorization_reference: Mapped[str] = mapped_column(String(200))
+    provenance_reference: Mapped[str] = mapped_column(String(200))
+    status: Mapped[str] = mapped_column(String(30))
+    comparison: Mapped[str] = mapped_column(String(30))
+    passport_authenticated: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    presentation_live: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    review_status: Mapped[str] = mapped_column(String(30), default='pending_officer_review')
+    correlation_id: Mapped[str] = mapped_column(String(36), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
