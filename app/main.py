@@ -1,7 +1,8 @@
 from contextlib import asynccontextmanager
 from datetime import date
 from uuid import uuid4
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.db import Base, engine, get_db
@@ -10,9 +11,14 @@ from app.schemas import PersonCreate, DocumentCreate, CaseCreate, CaseTransition
 Base.metadata.create_all(bind=engine)
 @asynccontextmanager
 async def lifespan(app:FastAPI): Base.metadata.create_all(bind=engine); yield
-app=FastAPI(title='UNG-CERBERUS',version='0.3.0',lifespan=lifespan)
+app=FastAPI(title='UNG-CERBERUS',version='0.4.0',lifespan=lifespan)
 @app.get('/health')
 def health(): return {'status':'ok','system':'UNG-CERBERUS'}
+@app.get('/v1/profiles/uganda')
+def uganda_profile(): return {'country_code':'UG','name':'Uganda','document_types':['passport','national_id','permit'],'ports':{'EBB':'Entebbe International Airport'},'policy_mode':'configurable'}
+@app.get('/',response_class=HTMLResponse)
+def workspace():
+ return '''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>UNG-CERBERUS</title><style>body{font-family:system-ui;margin:0;background:#0b0f14;color:#eef3f8}header{padding:24px;background:#121a24}main{padding:18px;display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}.card{background:#151e29;border:1px solid #2a3747;border-radius:16px;padding:18px}.safe{color:#7ee0a1}.warn{color:#ffd166}small{color:#9db0c4}</style></head><body><header><h1>UNG-CERBERUS</h1><small>Centralized Entry, Risk & Biometric Evaluation, Registration & Unified Screening</small></header><main><div class="card"><h2>Identity Registry</h2><p>People, aliases and provenance.</p></div><div class="card"><h2>Travel Documents</h2><p>Passports and verification records.</p></div><div class="card"><h2>Immigration Cases</h2><p>Case status and review history.</p></div><div class="card"><h2>Border Events</h2><p>Entry and exit event registry.</p></div><div class="card"><h2>Watchlist Screening</h2><p class="warn">Candidate match does not confirm identity.</p></div><div class="card"><h2>Human Review</h2><p class="safe">Clear or confirm only after authorized review.</p></div></main></body></html>'''
 def person_out(p): return {'id':p.id,'person_code':p.person_code,'primary_name':p.primary_name,'date_of_birth':p.date_of_birth,'nationality':p.nationality,'citizenship':p.citizenship,'status':p.status,'source_authority':p.source_authority,'provenance_reference':p.provenance_reference,'aliases':[a.name for a in p.aliases]}
 @app.post('/v1/people',status_code=201)
 def create_person(data:PersonCreate,db:Session=Depends(get_db)):
@@ -56,8 +62,7 @@ def screening_out(s): return {'id':s.id,'person_id':s.person_id,'purpose':s.purp
 def screen(data:ScreeningCreate,db:Session=Depends(get_db)):
  p=db.get(Person,data.person_id)
  if not p: raise HTTPException(404,'Person not found')
- active=db.scalars(select(WatchlistEntry).where(WatchlistEntry.status=='active',WatchlistEntry.valid_until>=date.today())).all(); hits=[]
- names={p.primary_name.casefold(),*[a.name.casefold() for a in p.aliases]}
+ active=db.scalars(select(WatchlistEntry).where(WatchlistEntry.status=='active',WatchlistEntry.valid_until>=date.today())).all(); hits=[]; names={p.primary_name.casefold(),*[a.name.casefold() for a in p.aliases]}
  for w in active:
   if w.subject_name.casefold() in names and (w.date_of_birth is None or p.date_of_birth is None or w.date_of_birth==p.date_of_birth): hits.append(w)
  s=ScreeningEvent(person_id=p.id,purpose=data.purpose,actor_ref=data.actor_ref,decision='pending_review' if hits else 'no_active_match'); db.add(s); db.flush()
