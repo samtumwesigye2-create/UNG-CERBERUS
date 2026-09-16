@@ -31,5 +31,7 @@ def test_uganda_profile_and_operator_workspace_contract():
         assert profile.json()['country_code']=='UG'
         page=client.get('/')
         assert page.status_code==200
-        for marker in ['Identity Registry','Travel Documents','Immigration Cases','Border Events','Watchlist Screening','Human Review']:
+        for marker in ['Traveler Records','Travel Documents','Case Management','Border Events','Watchlist Review','Human Review',
+                       'Passport Verification','Officer Review','Entry / Exit Record','Audit Trail',
+                       'Provider integration deferred']:
             assert marker in page.text
