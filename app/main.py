@@ -5,20 +5,22 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from app.db import Base, engine, get_db
-from app.models import Person, PersonAlias, TravelDocument, ImmigrationCase, CaseStatusHistory, BorderEvent, WatchlistEntry, ScreeningEvent, CandidateMatch, Adjudication
-from app.schemas import PersonCreate, DocumentCreate, CaseCreate, CaseTransition, BorderEventCreate, WatchlistCreate, ScreeningCreate, AdjudicationCreate
-Base.metadata.create_all(bind=engine)
+from app.db import Base, engine, ensure_schema, get_db
+from app.models import Person, PersonAlias, TravelDocument, ImmigrationCase, CaseStatusHistory, WatchlistEntry, ScreeningEvent, CandidateMatch, Adjudication
+from app.schemas import PersonCreate, DocumentCreate, CaseCreate, CaseTransition, WatchlistCreate, ScreeningCreate, AdjudicationCreate
+from app.passport_verification import router as passport_verification_router
+ensure_schema()
 @asynccontextmanager
-async def lifespan(app:FastAPI): Base.metadata.create_all(bind=engine); yield
+async def lifespan(app:FastAPI): ensure_schema(); yield
 app=FastAPI(title='UNG-CERBERUS',version='0.4.0',lifespan=lifespan)
+app.include_router(passport_verification_router)
 @app.get('/health')
 def health(): return {'status':'ok','system':'UNG-CERBERUS'}
 @app.get('/v1/profiles/uganda')
 def uganda_profile(): return {'country_code':'UG','name':'Uganda','document_types':['passport','national_id','permit'],'ports':{'EBB':'Entebbe International Airport'},'policy_mode':'configurable'}
-@app.get('/',response_class=HTMLResponse)
+@app.get('/', response_class=HTMLResponse)
 def workspace():
- return '''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>UNG-CERBERUS</title><style>body{font-family:system-ui;margin:0;background:#0b0f14;color:#eef3f8}header{padding:24px;background:#121a24}main{padding:18px;display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}.card{background:#151e29;border:1px solid #2a3747;border-radius:16px;padding:18px}.safe{color:#7ee0a1}.warn{color:#ffd166}small{color:#9db0c4}</style></head><body><header><h1>UNG-CERBERUS</h1><small>Centralized Entry, Risk & Biometric Evaluation, Registration & Unified Screening</small></header><main><div class="card"><h2>Identity Registry</h2><p>People, aliases and provenance.</p></div><div class="card"><h2>Travel Documents</h2><p>Passports and verification records.</p></div><div class="card"><h2>Immigration Cases</h2><p>Case status and review history.</p></div><div class="card"><h2>Border Events</h2><p>Entry and exit event registry.</p></div><div class="card"><h2>Watchlist Screening</h2><p class="warn">Candidate match does not confirm identity.</p></div><div class="card"><h2>Human Review</h2><p class="safe">Clear or confirm only after authorized review.</p></div></main></body></html>'''
+ return '''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>UNG-CERBERUS</title><style>body{font-family:system-ui;margin:0;background:#0b0f14;color:#eef3f8}header{padding:24px;background:#121a24}main{padding:18px;display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}.card{background:#151e29;border:1px solid #2a3747;border-radius:16px;padding:18px}.safe{color:#7ee0a1}.warn{color:#ffd166}.muted{color:#9db0c4;font-size:.92rem}.stage{border-left:4px solid #4da3ff}.audit{border-left-color:#b48cff}</style></head><body><header><h1>UNG-CERBERUS</h1><small>Centralized Entry, Risk &amp; Biometric Evaluation, Border Entry &amp; Unified Security</small><p class="muted">National border entry/exit identification management. Passport-only 1:1 comparison; no biometric enrollment or registry search.</p></header><main><div class="card"><h2>Traveler Records</h2><p>People, aliases and provenance.</p></div><div class="card"><h2>Travel Documents</h2><p>Passports and verification records.</p></div><div class="card stage"><h2>Passport Verification</h2><p>Compare the traveler presenting at the border with the biometric in the presented passport.</p><p class="muted">Provider integration deferred</p></div><div class="card stage"><h2>Officer Review</h2><p>Record a consistent, inconsistent, or inconclusive review with a reason.</p></div><div class="card stage"><h2>Entry / Exit Record</h2><p>Record one reviewed border movement linked to the passport check.</p></div><div class="card audit"><h2>Audit Trail</h2><p>Append-only actor, purpose, outcome, entity, and correlation metadata.</p></div><div class="card"><h2>Case Management</h2><p>Case status and review history.</p></div><div class="card"><h2>Border Events</h2><p>Entry and exit event registry.</p></div><div class="card"><h2>Watchlist Review</h2><p class="warn">Candidate match does not confirm identity.</p></div><div class="card"><h2>Human Review</h2><p class="safe">Clear or confirm only after authorized review.</p></div></main></body></html>'''
 def person_out(p): return {'id':p.id,'person_code':p.person_code,'primary_name':p.primary_name,'date_of_birth':p.date_of_birth,'nationality':p.nationality,'citizenship':p.citizenship,'status':p.status,'source_authority':p.source_authority,'provenance_reference':p.provenance_reference,'aliases':[a.name for a in p.aliases]}
 @app.post('/v1/people',status_code=201)
 def create_person(data:PersonCreate,db:Session=Depends(get_db)):
@@ -48,11 +50,6 @@ def transition_case(case_id:int,data:CaseTransition,db:Session=Depends(get_db)):
  allowed={'open':{'under_review'},'under_review':{'decided'},'decided':set()}
  if data.status not in allowed.get(c.status,set()): raise HTTPException(409,'Unsupported case transition')
  c.status=data.status; db.add(CaseStatusHistory(case_id=c.id,status=data.status,actor_ref=data.actor_ref,reason=data.reason)); db.commit(); db.refresh(c); return case_out(c)
-@app.post('/v1/border-events',status_code=201)
-def border_event(data:BorderEventCreate,db:Session=Depends(get_db)):
- if data.direction not in {'entry','exit'}: raise HTTPException(422,'direction must be entry or exit')
- if not db.get(Person,data.person_id): raise HTTPException(404,'Person not found')
- e=BorderEvent(**data.model_dump()); db.add(e); db.commit(); db.refresh(e); return {'id':e.id,'person_id':e.person_id,'direction':e.direction,'port_code':e.port_code,'country_code':e.country_code,'occurred_at':e.occurred_at,'provenance_reference':e.provenance_reference}
 @app.post('/v1/watchlist',status_code=201)
 def watchlist(data:WatchlistCreate,db:Session=Depends(get_db)):
  if not data.legal_authority_reference.strip() or not data.originating_authority.strip(): raise HTTPException(422,'authority and legal authority are required')

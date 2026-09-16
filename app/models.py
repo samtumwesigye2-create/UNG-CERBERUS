@@ -1,5 +1,5 @@
 from datetime import date, datetime, timezone
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, String, Text, event
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db import Base
 
@@ -25,7 +25,7 @@ class ImmigrationCase(Base):
 class CaseStatusHistory(Base):
     __tablename__='case_status_history'; id: Mapped[int]=mapped_column(primary_key=True); case_id: Mapped[int]=mapped_column(ForeignKey('immigration_cases.id'),index=True); status: Mapped[str]=mapped_column(String(30)); actor_ref: Mapped[str]=mapped_column(String(120)); reason: Mapped[str]=mapped_column(Text); created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now_utc)
 class BorderEvent(Base):
-    __tablename__='border_events'; id: Mapped[int]=mapped_column(primary_key=True); person_id: Mapped[int]=mapped_column(ForeignKey('people.id'),index=True); direction: Mapped[str]=mapped_column(String(10)); port_code: Mapped[str]=mapped_column(String(20)); country_code: Mapped[str]=mapped_column(String(3)); occurred_at: Mapped[datetime]=mapped_column(DateTime(timezone=True)); source_authority: Mapped[str]=mapped_column(String(120)); provenance_reference: Mapped[str]=mapped_column(String(200))
+    __tablename__='border_events'; id: Mapped[int]=mapped_column(primary_key=True); person_id: Mapped[int]=mapped_column(ForeignKey('people.id'),index=True); passport_verification_id: Mapped[int|None]=mapped_column(ForeignKey('passport_verifications.id'), unique=True, nullable=True, index=True); direction: Mapped[str]=mapped_column(String(10)); port_code: Mapped[str]=mapped_column(String(20)); country_code: Mapped[str]=mapped_column(String(3)); occurred_at: Mapped[datetime]=mapped_column(DateTime(timezone=True)); source_authority: Mapped[str]=mapped_column(String(120)); provenance_reference: Mapped[str]=mapped_column(String(200))
 class WatchlistEntry(Base):
     __tablename__='watchlist_entries'; id: Mapped[int]=mapped_column(primary_key=True); subject_name: Mapped[str]=mapped_column(String(200),index=True); date_of_birth: Mapped[date|None]=mapped_column(Date,nullable=True); originating_authority: Mapped[str]=mapped_column(String(120)); reason_category: Mapped[str]=mapped_column(String(80)); legal_authority_reference: Mapped[str]=mapped_column(String(200)); valid_until: Mapped[date]=mapped_column(Date); provenance_reference: Mapped[str]=mapped_column(String(200)); status: Mapped[str]=mapped_column(String(30),default='active'); created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now_utc)
 class ScreeningEvent(Base):
@@ -43,3 +43,65 @@ class BiometricCandidate(Base):
     __tablename__='biometric_candidates'; id: Mapped[int]=mapped_column(primary_key=True); transaction_id: Mapped[int]=mapped_column(ForeignKey('biometric_transactions.id'),index=True); candidate_person_id: Mapped[int]=mapped_column(ForeignKey('people.id'),index=True); provider_score: Mapped[float]=mapped_column(Float); candidate_status: Mapped[str]=mapped_column(String(30),default='candidate'); rationale: Mapped[str]=mapped_column(Text)
 class BiometricDisposition(Base):
     __tablename__='biometric_dispositions'; id: Mapped[int]=mapped_column(primary_key=True); transaction_id: Mapped[int]=mapped_column(ForeignKey('biometric_transactions.id'),index=True); outcome: Mapped[str]=mapped_column(String(30)); reviewer_ref: Mapped[str]=mapped_column(String(120)); reason: Mapped[str]=mapped_column(Text); created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),default=now_utc)
+
+
+class PassportVerification(Base):
+    """Result metadata only: never a capture, passport session, or template."""
+    __tablename__ = 'passport_verifications'
+    review: Mapped['PassportReview | None'] = relationship(uselist=False)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    person_id: Mapped[int] = mapped_column(ForeignKey('people.id'), index=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey('travel_documents.id'), index=True)
+    modality: Mapped[str] = mapped_column(String(20))
+    provider: Mapped[str] = mapped_column(String(80))
+    synthetic: Mapped[bool] = mapped_column(Boolean)
+    operator_ref: Mapped[str] = mapped_column(String(120), index=True)
+    device_reference: Mapped[str] = mapped_column(String(120))
+    purpose: Mapped[str] = mapped_column(String(80), default='border_identity_verification')
+    authorization_reference: Mapped[str] = mapped_column(String(200))
+    provenance_reference: Mapped[str] = mapped_column(String(200))
+    status: Mapped[str] = mapped_column(String(30))
+    comparison: Mapped[str] = mapped_column(String(30))
+    passport_authenticated: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    presentation_live: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    review_status: Mapped[str] = mapped_column(String(30), default='pending_officer_review')
+    correlation_id: Mapped[str] = mapped_column(String(36), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class PassportReview(Base):
+    """One final review per check; original provider evidence remains untouched."""
+    __tablename__ = 'passport_reviews'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    verification_id: Mapped[int] = mapped_column(ForeignKey('passport_verifications.id'), unique=True)
+    reviewer_ref: Mapped[str] = mapped_column(String(120))
+    outcome: Mapped[str] = mapped_column(String(30))
+    reason: Mapped[str] = mapped_column(String(1000))
+    source_comparison: Mapped[str] = mapped_column(String(30))
+    synthetic: Mapped[bool] = mapped_column(Boolean)
+    correlation_id: Mapped[str] = mapped_column(String(36), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class AuditEvent(Base):
+    """Append-only operational metadata; never stores raw biometric material or capture handles."""
+    __tablename__ = 'audit_events'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(80), index=True)
+    entity_type: Mapped[str] = mapped_column(String(80))
+    entity_id: Mapped[int] = mapped_column(index=True)
+    actor_ref: Mapped[str] = mapped_column(String(120), index=True)
+    purpose: Mapped[str] = mapped_column(String(120))
+    outcome: Mapped[str] = mapped_column(String(80))
+    correlation_id: Mapped[str] = mapped_column(String(36), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+@event.listens_for(AuditEvent, 'before_update')
+def _audit_event_is_append_only(mapper, connection, target):
+    raise ValueError('Audit events are append-only')
+
+
+@event.listens_for(AuditEvent, 'before_delete')
+def _audit_event_cannot_be_deleted(mapper, connection, target):
+    raise ValueError('Audit events are append-only')
