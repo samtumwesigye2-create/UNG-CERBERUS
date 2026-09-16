@@ -9,7 +9,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.db import Base, get_db
 from app.main import app
-from app.models import BiometricReference, BiometricCandidate, ScreeningEvent, TravelDocument
+from app.models import AuditEvent, BiometricReference, BiometricCandidate, ScreeningEvent, TravelDocument
 
 TOKEN = 'test-only-officer-token-0000000000000000'
 HEADERS = {'Authorization': f'Bearer {TOKEN}'}
@@ -412,3 +412,55 @@ def test_legacy_border_event_route_is_retired(context):
         'source_authority': 'IMMIGRATION', 'provenance_reference': 'LEGACY-001',
     })
     assert response.status_code == 404
+
+
+def test_audit_trail_records_verification_review_and_border_event_without_sensitive_references(context):
+    client, engine, payload, original, review = _reviewed_passport(context)
+    assert review.status_code == 201
+    event_response = client.post(f"{URL}/{original['id']}/border-event", headers=HEADERS, json={
+        'direction': 'entry', 'port_code': 'EBB', 'country_code': 'UG',
+        'occurred_at': '2026-09-16T16:00:00Z', 'source_authority': 'IMMIGRATION',
+        'provenance_reference': 'AUDIT-BORDER-001',
+    })
+    assert event_response.status_code == 201
+    with Session(engine) as db:
+        events = db.scalars(select(AuditEvent).order_by(AuditEvent.id)).all()
+        assert [event.event_type for event in events] == [
+            'passport_verification.created', 'passport_review.created', 'border_event.created'
+        ]
+        assert all(event.actor_ref == 'synthetic-officer' for event in events)
+        assert all(event.purpose == 'border_identity_verification' for event in events[:2])
+        assert events[2].purpose == 'border_entry_exit_record'
+        assert all(event.correlation_id == original['correlation_id'] for event in events)
+        assert events[0].entity_type == 'passport_verification'
+        assert events[1].entity_id == original['id']
+        assert events[2].entity_type == 'border_event'
+        assert events[2].outcome == 'entry'
+        dump = '\n'.join(engine.raw_connection().connection.iterdump())
+    for sensitive in ('synthetic://passport/', 'synthetic://traveler/'):
+        assert sensitive not in dump
+
+
+def test_failed_provider_verification_still_creates_safe_audit_event(context, monkeypatch):
+    client, engine, payload = context
+    monkeypatch.delenv('CERBERUS_PASSPORT_PROVIDER')
+    response = client.post(URL, headers=HEADERS, json=payload)
+    assert response.status_code == 503
+    with Session(engine) as db:
+        event = db.scalar(select(AuditEvent))
+        assert event.event_type == 'passport_verification.created'
+        assert event.outcome == 'provider_unavailable'
+        assert event.actor_ref == 'synthetic-officer'
+
+
+def test_audit_events_reject_update_and_delete(context):
+    _, engine, _, _, _ = _reviewed_passport(context)
+    with Session(engine) as db:
+        event = db.scalar(select(AuditEvent))
+        event.outcome = 'tampered'
+        with pytest.raises(ValueError, match='append-only'):
+            db.commit()
+        db.rollback()
+        db.delete(event)
+        with pytest.raises(ValueError, match='append-only'):
+            db.commit()

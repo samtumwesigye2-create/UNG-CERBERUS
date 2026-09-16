@@ -8,6 +8,7 @@ CERBERUS is a border entry/exit workflow prototype. The current biometric scope 
 - `GET /v1/passport-verifications/{id}` returns result metadata to the same authenticated operator.
 - `POST /v1/passport-verifications/{id}/review` records an officer review (`consistent`, `inconsistent`, or `inconclusive`) with a required reason. It preserves the original evidence, prevents conflicting outcomes, and never admits or denies a traveler by itself.
 - `POST /v1/passport-verifications/{id}/border-event` records one authenticated entry or exit event only after a consistent officer review. It links the event to the passport verification and rejects reuse.
+- Verification, review, and border-event actions create append-only audit metadata with actor, purpose, outcome, entity, and correlation ID. Audit rows contain no raw biometric data or capture/session references.
 - Passport verification, review, and linked border-event endpoints require a server-configured bearer token and operator identity. Missing configuration fails closed. The request cannot select a provider or impersonate another operator.
 - The passport must be active, unexpired, and associated with the claimed person. Missing expiry or a future issue date blocks verification.
 - A trusted provider must authenticate the presented passport and verify document number/issuer binding and live presentation before a comparison is usable. Authentication/liveness failure gives `inconclusive`, regardless of a claimed match.

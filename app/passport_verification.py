@@ -15,8 +15,9 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.audit import record_audit
 from app.db import get_db
-from app.models import BorderEvent, PassportReview, PassportVerification, Person, TravelDocument
+from app.models import AuditEvent, BorderEvent, PassportReview, PassportVerification, Person, TravelDocument
 from app.passport_provider import (
     PassportEvidence, PassportProvider, SyntheticPassportProvider, UnavailablePassportProvider,
 )
@@ -174,6 +175,12 @@ def verify_passport(
         record.status = 'failed'
         response.status_code = 502
     db.add(record)
+    db.flush()
+    record_audit(
+        db, event_type='passport_verification.created', entity_type='passport_verification',
+        entity_id=record.id, actor_ref=operator, purpose='border_identity_verification',
+        outcome=record.status, correlation_id=record.correlation_id,
+    )
     db.commit()
     db.refresh(record)
     return record
@@ -213,6 +220,12 @@ def create_border_event(
     )
     db.add(event)
     try:
+        db.flush()
+        record_audit(
+            db, event_type='border_event.created', entity_type='border_event',
+            entity_id=event.id, actor_ref=operator, purpose='border_entry_exit_record',
+            outcome=event.direction, correlation_id=record.correlation_id,
+        )
         db.commit()
     except IntegrityError:
         db.rollback()
@@ -265,6 +278,12 @@ def review_verification(
         raise HTTPException(409, 'Passport verification already reviewed')
     db.add(review)
     try:
+        db.flush()
+        record_audit(
+            db, event_type='passport_review.created', entity_type='passport_verification',
+            entity_id=record.id, actor_ref=operator, purpose='border_identity_verification',
+            outcome=review.outcome, correlation_id=record.correlation_id,
+        )
         db.commit()
     except IntegrityError:
         db.rollback()

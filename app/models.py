@@ -1,5 +1,5 @@
 from datetime import date, datetime, timezone
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, String, Text, event
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db import Base
 
@@ -81,3 +81,27 @@ class PassportReview(Base):
     synthetic: Mapped[bool] = mapped_column(Boolean)
     correlation_id: Mapped[str] = mapped_column(String(36), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class AuditEvent(Base):
+    """Append-only operational metadata; never stores raw biometric material or capture handles."""
+    __tablename__ = 'audit_events'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(80), index=True)
+    entity_type: Mapped[str] = mapped_column(String(80))
+    entity_id: Mapped[int] = mapped_column(index=True)
+    actor_ref: Mapped[str] = mapped_column(String(120), index=True)
+    purpose: Mapped[str] = mapped_column(String(120))
+    outcome: Mapped[str] = mapped_column(String(80))
+    correlation_id: Mapped[str] = mapped_column(String(36), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+@event.listens_for(AuditEvent, 'before_update')
+def _audit_event_is_append_only(mapper, connection, target):
+    raise ValueError('Audit events are append-only')
+
+
+@event.listens_for(AuditEvent, 'before_delete')
+def _audit_event_cannot_be_deleted(mapper, connection, target):
+    raise ValueError('Audit events are append-only')
