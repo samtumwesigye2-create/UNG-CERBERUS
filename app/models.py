@@ -48,6 +48,7 @@ class BiometricDisposition(Base):
 class PassportVerification(Base):
     """Result metadata only: never a capture, passport session, or template."""
     __tablename__ = 'passport_verifications'
+    review: Mapped['PassportReview | None'] = relationship(uselist=False)
     id: Mapped[int] = mapped_column(primary_key=True)
     person_id: Mapped[int] = mapped_column(ForeignKey('people.id'), index=True)
     document_id: Mapped[int] = mapped_column(ForeignKey('travel_documents.id'), index=True)
@@ -65,4 +66,18 @@ class PassportVerification(Base):
     presentation_live: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     review_status: Mapped[str] = mapped_column(String(30), default='pending_officer_review')
     correlation_id: Mapped[str] = mapped_column(String(36), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class PassportReview(Base):
+    """One final review per check; original provider evidence remains untouched."""
+    __tablename__ = 'passport_reviews'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    verification_id: Mapped[int] = mapped_column(ForeignKey('passport_verifications.id'), unique=True)
+    reviewer_ref: Mapped[str] = mapped_column(String(120))
+    outcome: Mapped[str] = mapped_column(String(30))
+    reason: Mapped[str] = mapped_column(String(1000))
+    source_comparison: Mapped[str] = mapped_column(String(30))
+    synthetic: Mapped[bool] = mapped_column(Boolean)
+    correlation_id: Mapped[str] = mapped_column(String(36), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)

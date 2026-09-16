@@ -240,3 +240,85 @@ def test_document_from_different_passport_is_not_accepted_by_synthetic_reader(co
     assert response.status_code == 201
     assert response.json()['passport_authenticated'] is False
     assert response.json()['comparison'] == 'inconclusive'
+
+
+def test_officer_review_records_reason_and_preserves_original_evidence(context):
+    client, engine, payload = context
+    original = client.post(URL, headers=HEADERS, json=payload).json()
+    review_url = f"{URL}/{original['id']}/review"
+    response = client.post(review_url, headers=HEADERS, json={
+        'outcome': 'consistent', 'reason': 'Presented passport evidence reviewed.'
+    })
+    assert response.status_code == 201
+    review = response.json()
+    assert review['reviewer_ref'] == 'synthetic-officer'
+    assert review['outcome'] == 'consistent'
+    assert review['reason'] == 'Presented passport evidence reviewed.'
+    assert review['synthetic'] is True
+    assert review['correlation_id'] == original['correlation_id']
+    assert review['verification_id'] == original['id']
+    assert review['source_comparison'] == 'match'
+    after = client.get(f"{URL}/{original['id']}", headers=HEADERS).json()
+    assert after['review_status'] == 'reviewed'
+    assert after['review'] == review
+    for key in ('comparison', 'status', 'passport_authenticated', 'presentation_live', 'synthetic'):
+        assert after[key] == original[key]
+    assert client.post(review_url, headers=HEADERS, json={
+        'outcome': 'inconclusive', 'reason': 'Trying to overwrite the first review.'
+    }).status_code == 409
+    assert client.get(f"{URL}/{original['id']}", headers=HEADERS).json()['review'] == review
+    with Session(engine) as db:
+        assert db.scalar(select(func.count()).select_from(ScreeningEvent)) == 0
+
+
+@pytest.mark.parametrize('source,outcome,expected', [
+    ('match', 'inconsistent', 409), ('no_match', 'consistent', 409),
+    ('unavailable', 'consistent', 409), ('unavailable', 'inconsistent', 409),
+    ('untrusted', 'consistent', 409), ('untrusted', 'inconsistent', 409),
+    ('no_match', 'inconsistent', 201), ('unavailable', 'inconclusive', 201),
+    ('untrusted', 'inconclusive', 201), ('match', 'inconclusive', 201),
+])
+def test_review_cannot_promote_missing_or_contradictory_evidence(context, monkeypatch, source, outcome, expected):
+    client, _, payload = context
+    if source == 'no_match': payload['traveler_sample_reference'] = 'synthetic://traveler/face/demo-other'
+    elif source == 'unavailable': monkeypatch.delenv('CERBERUS_PASSPORT_PROVIDER')
+    elif source == 'untrusted': payload['passport_session_reference'] = 'synthetic://untrusted'
+    original = client.post(URL, headers=HEADERS, json=payload).json()
+    response = client.post(f"{URL}/{original['id']}/review", headers=HEADERS, json={
+        'outcome': outcome, 'reason': 'Officer inspected available evidence.'
+    })
+    assert response.status_code == expected
+    after = client.get(f"{URL}/{original['id']}", headers=HEADERS).json()
+    assert after['comparison'] == original['comparison']
+    assert after['status'] == original['status']
+    if expected == 409:
+        assert after['review_status'] == 'pending_officer_review'
+        assert after['review'] is None
+    elif outcome != 'consistent':
+        assert after['review_status'] == 'requires_follow_up'
+
+
+@pytest.mark.parametrize('body', [
+    {'outcome': 'consistent'},
+    {'outcome': 'consistent', 'reason': '   '},
+    {'outcome': 'consistent', 'reason': 'x' * 1001},
+    {'outcome': 'admit_traveler', 'reason': 'Not an immigration decision endpoint'},
+    {'outcome': 'consistent', 'reason': 'Reviewed', 'reviewer_ref': 'spoofed'},
+])
+def test_officer_review_validates_reason_and_rejects_actor_spoofing(context, body):
+    client, _, payload = context
+    original = client.post(URL, headers=HEADERS, json=payload).json()
+    response = client.post(f"{URL}/{original['id']}/review", headers=HEADERS, json=body)
+    assert response.status_code == 422
+    assert client.get(f"{URL}/{original['id']}", headers=HEADERS).json()['review_status'] == 'pending_officer_review'
+
+
+def test_officer_review_requires_authorized_owner(context, monkeypatch):
+    client, _, payload = context
+    original = client.post(URL, headers=HEADERS, json=payload).json()
+    review_url = f"{URL}/{original['id']}/review"
+    body = {'outcome': 'consistent', 'reason': 'Reviewed'}
+    assert client.post(review_url, json=body).status_code == 401
+    monkeypatch.setenv('CERBERUS_PASSPORT_OPERATOR', 'other-officer')
+    assert client.post(review_url, headers=HEADERS, json=body).status_code == 404
+    assert client.post(f'{URL}/999999/review', headers=HEADERS, json=body).status_code == 404

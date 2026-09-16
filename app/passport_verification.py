@@ -11,10 +11,12 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from sqlalchemy import update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models import PassportVerification, Person, TravelDocument
+from app.models import PassportReview, PassportVerification, Person, TravelDocument
 from app.passport_provider import (
     PassportEvidence, PassportProvider, SyntheticPassportProvider, UnavailablePassportProvider,
 )
@@ -52,6 +54,25 @@ class PassportVerificationRequest(BaseModel):
     provenance_reference: AuditReference
 
 
+class PassportReviewRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    outcome: Literal['consistent', 'inconsistent', 'inconclusive']
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)]
+
+
+class PassportReviewResult(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    verification_id: int
+    reviewer_ref: str
+    outcome: str
+    reason: str
+    source_comparison: str
+    synthetic: bool
+    correlation_id: str
+    created_at: datetime
+
+
 class PassportVerificationResult(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
@@ -70,6 +91,7 @@ class PassportVerificationResult(BaseModel):
     passport_authenticated: bool | None
     presentation_live: bool | None
     review_status: str
+    review: PassportReviewResult | None
     correlation_id: str
     created_at: datetime
 
@@ -156,3 +178,48 @@ def get_verification(
     if record is None or record.operator_ref != operator:
         raise HTTPException(404, 'Passport verification not found')
     return record
+
+
+@router.post('/{verification_id}/review', status_code=201, response_model=PassportReviewResult)
+def review_verification(
+    verification_id: int, data: PassportReviewRequest,
+    operator: str = Depends(require_passport_operator), db: Session = Depends(get_db),
+):
+    record = db.get(PassportVerification, verification_id)
+    if record is None or record.operator_ref != operator:
+        raise HTTPException(404, 'Passport verification not found')
+    if record.review_status != 'pending_officer_review':
+        raise HTTPException(409, 'Passport verification already reviewed')
+
+    if data.outcome != 'inconclusive':
+        expected = 'match' if data.outcome == 'consistent' else 'no_match'
+        if (record.status != 'completed' or record.comparison != expected
+                or not record.passport_authenticated or not record.presentation_live):
+            raise HTTPException(409, 'Available evidence does not support this outcome; further review required')
+
+    review = PassportReview(
+        verification_id=record.id, reviewer_ref=operator, outcome=data.outcome,
+        reason=data.reason, source_comparison=record.comparison, synthetic=record.synthetic,
+        correlation_id=record.correlation_id,
+    )
+    # Claim the pending state atomically so competing requests cannot both finalize it.
+    state = 'reviewed' if data.outcome == 'consistent' else 'requires_follow_up'
+    claimed = db.execute(
+        update(PassportVerification)
+        .where(PassportVerification.id == record.id,
+               PassportVerification.operator_ref == operator,
+               PassportVerification.review_status == 'pending_officer_review')
+        .values(review_status=state)
+        .execution_options(synchronize_session=False)
+    )
+    if claimed.rowcount != 1:
+        db.rollback()
+        raise HTTPException(409, 'Passport verification already reviewed')
+    db.add(review)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, 'Passport verification already reviewed') from None
+    db.refresh(review)
+    return review
