@@ -7,6 +7,9 @@ from app.db import Base, engine, get_db
 from app.models import Person, PersonAlias, TravelDocument, ImmigrationCase, CaseStatusHistory
 from app.schemas import PersonCreate, DocumentCreate, CaseCreate, CaseTransition
 
+# Ensure model metadata is registered and schema exists for direct TestClient use.
+Base.metadata.create_all(bind=engine)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
