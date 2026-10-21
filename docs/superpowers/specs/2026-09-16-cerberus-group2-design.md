@@ -1,5 +1,7 @@
 # UNG-CERBERUS Group 2 — Biometric Gateway & Operator Casework Design
 
+> SUPERSEDED — 2026-09-16: The user removed biometric enrollment and clarified passport-only 1:1 checks of travelers presenting at the border. Do not execute the enrollment or registry-identification tasks below. This document is historical; README.md describes the current implementation and limitations.
+
 Date: 2026-09-16
 Status: Approved design
 

@@ -19,8 +19,7 @@ def test_border_event_and_governed_watchlist_screening():
             'occurred_at': '2026-09-16T05:00:00Z',
             'source_authority': 'IMMIGRATION', 'provenance_reference': 'EBB-ENTRY-001'
         })
-        assert event.status_code == 201
-        assert event.json()['direction'] == 'entry'
+        assert event.status_code == 404
 
         future = (date.today() + timedelta(days=30)).isoformat()
         wl = client.post('/v1/watchlist', json={

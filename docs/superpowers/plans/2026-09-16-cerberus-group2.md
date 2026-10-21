@@ -1,5 +1,7 @@
 # CERBERUS Group 2 Implementation Plan
 
+> SUPERSEDED — 2026-09-16: The user removed biometric enrollment and clarified passport-only 1:1 checks of travelers presenting at the border. Do not execute the enrollment or registry-identification tasks below. This document is historical; README.md describes the current implementation and limitations.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a provider-neutral, governed biometric gateway and expanded operator casework workspace using synthetic data and human-reviewed candidate results.
